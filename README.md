@@ -98,19 +98,12 @@ pip install opencv-python numpy pandas matplotlib
 
 ## Project Structure
 ├── extract_visual_attention.py    # HSV-based heatmap processing
-
 ├── highlight_visual_differences.py # Original vs heatmap comparison
-
 ├── image_text_feature_analysis.py  # CLIP image feature extraction
-
 ├── text_feature_extraction.py      # CLIP text feature extraction
-
 ├── feature_similarity_analysis.py  # Cosine similarity computation
-
 ├── train_path_choice_model_en.py   # Random Forest classifier
-
 ├── visualize_similarity.py         # Results visualization
-
 └── README.md
 
 ---
