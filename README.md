@@ -4,7 +4,7 @@
 > UCL Bartlett School of Architecture · Architectural Computation – Digital Studio 1: Simulated Realities  
 > Team: **Rui Gu** (Lead), Hexin Han, Cem Bektas · December 2024
 
-> **My contribution:** Research design · Eye-tracking experiment coordination · CLIP pipeline · Cosine similarity analysis · Random Forest classifier · ViT heatmap predictor (architecture)
+> **My contribution:** Research design · Eye-tracking experiment coordination · CLIP pipeline · Cosine similarity analysis · Random Forest classifier · ViT heatmap predictor (architecture design)
 
 ---
 
@@ -21,7 +21,7 @@
   - [Stage 1 — Eye-Tracking Experiment](#stage-1--eye-tracking-experiment)
   - [Stage 2 — Feature Extraction](#stage-2--feature-extraction)
   - [Stage 3 — Cosine Similarity Analysis](#stage-3--cosine-similarity-analysis)
-  - [Stage 4 — Path Decision Classification (My Core Contribution)](#stage-4--path-decision-classification-my-core-contribution)
+  - [Stage 4 — Path Decision Classification](#stage-4--path-decision-classification)
   - [Stage 5 — Heatmap Prediction](#stage-5--heatmap-prediction)
 - [Results](#results)
 - [Project Structure](#project-structure)
@@ -37,7 +37,7 @@ Standard wayfinding research measures either where people look (eye-tracking) or
 
 > **What is the relationship between pedestrians' visual attention distribution and the environmental cues they rely on for wayfinding decisions when searching for a train station in static Street View Images?**
 
-We operationalize this through two sub-questions:
+We operationalise this through two sub-questions:
 
 1. **Alignment:** Can CLIP's shared embedding space quantify semantic agreement between gaze heatmaps and verbal reasoning? (→ cosine similarity analysis)
 2. **Prediction:** Do fused gaze + language features reliably predict discrete path decisions (Left / Straight / Right)? (→ Random Forest classifier)
@@ -52,7 +52,7 @@ We operationalize this through two sub-questions:
 Raw Data
  ├── Eye-tracking sessions (GazeRecorder, webcam-based)
  │     5 participants × 13 SVIs = 65 gaze recordings
- │     Output: heatmap PNG per (participant, SVI), 800×600
+ │     Output: heatmap PNG per (participant, SVI), 800×600 px
  └── Voice-to-text logs
        65 verbal navigation descriptions
        Output: path label (L/S/R) + reasoning string per (participant, SVI)
@@ -122,7 +122,7 @@ We use OpenAI CLIP (ViT-B/32) as a **frozen feature extractor** — it is not fi
 **Why CLIP over a task-specific encoder?**
 
 - No paired (heatmap, description) training data exists at this scale — fine-tuning is not feasible with N=65
-- CLIP's semantic embedding space captures object-level and scene-level semantics that are directly relevant to navigation (buildings, roads, signs)
+- CLIP's semantic embedding space captures object-level and scene-level semantics directly relevant to navigation (buildings, roads, signs)
 - A CNN-based image encoder trained on image classification would not share a representation space with text, making cross-modal comparison impossible
 
 **Visual branch — HSV conversion rationale:**
@@ -134,25 +134,25 @@ import cv2
 import clip
 import torch
 import numpy as np
+from PIL import Image
 
 model, preprocess = clip.load("ViT-B/32", device="cpu")
 model.eval()
 
 def extract_visual_embedding(heatmap_path: str) -> np.ndarray:
     """
-    Load a GazeRecorder heatmap PNG, convert RGB→HSV,
-    encode with CLIP ViT-B/32 (frozen).
+    Load a GazeRecorder heatmap PNG (800×600), convert RGB→HSV,
+    resize to 224×224, encode with CLIP ViT-B/32 (frozen).
     Returns: numpy array of shape [512]
     """
     img_bgr = cv2.imread(heatmap_path)
     img_hsv = cv2.cvtColor(img_bgr, cv2.COLOR_BGR2HSV)
-    # Convert single-channel H back to 3-channel for CLIP's RGB input
     img_h = img_hsv[:, :, 0]
     img_rgb = cv2.cvtColor(
         cv2.merge([img_h, img_h, img_h]), cv2.COLOR_GRAY2RGB
     )
     pil_img = Image.fromarray(img_rgb)
-    tensor = preprocess(pil_img).unsqueeze(0)
+    tensor = preprocess(pil_img).unsqueeze(0)  # preprocess handles resize to 224×224
     with torch.no_grad():
         embedding = model.encode_image(tensor)
     return embedding.squeeze().numpy()   # shape: [512]
@@ -163,7 +163,7 @@ def extract_visual_embedding(heatmap_path: str) -> np.ndarray:
 ```python
 def extract_text_embedding(description: str) -> np.ndarray:
     """
-    Tokenise a verbal navigation description with CLIP's BPE tokeniser,
+    Tokenise a normalised verbal navigation description with CLIP's BPE tokeniser,
     encode with CLIP text encoder (frozen).
     Returns: numpy array of shape [512]
     """
@@ -218,7 +218,9 @@ With 20/28/17 class distribution, a classifier trained on raw data would be bias
 
 $$x_{\text{new}} = x_i + \lambda \cdot (x_{k\text{-nn}} - x_i), \quad \lambda \sim \mathcal{U}(0, 1)$$
 
-Parameters: `k_neighbors=3`, `random_state=42`. Applied only to the training fold during cross-validation to prevent data leakage.
+Parameters: `k_neighbors=4`, `random_state=42`.
+
+> **Implementation note:** In the production script (`train_path_choice_model_en.py`), SMOTE is applied to the full dataset before the CV split. This introduces a mild data leakage risk — synthetic samples derived from the full set may appear in both training and validation folds, which partially inflates the reported CV accuracy (86.96%). The corrected implementation below applies SMOTE strictly within each training fold:
 
 ```python
 from sklearn.ensemble import RandomForestClassifier
@@ -229,7 +231,7 @@ import numpy as np
 visual = np.load("outputs/visual_embeddings.npy")   # [65, 512]
 text   = np.load("outputs/text_embeddings.npy")     # [65, 512]
 X = np.concatenate([visual, text], axis=1)          # [65, 1024]
-# labels: np.load("data/labels.npy")  — 0=Left, 1=Straight, 2=Right
+# y = np.load("data/labels.npy")  — 0=Left, 1=Straight, 2=Right
 
 rf = RandomForestClassifier(
     n_estimators=200,
@@ -239,7 +241,7 @@ rf = RandomForestClassifier(
     n_jobs=-1,
 )
 
-smote = SMOTE(k_neighbors=3, random_state=42)
+smote = SMOTE(k_neighbors=4, random_state=42)
 cv = StratifiedKFold(n_splits=3, shuffle=True, random_state=42)
 
 cv_scores = []
@@ -261,7 +263,7 @@ print(f"CV accuracy: {np.mean(cv_scores):.4f} ± {np.std(cv_scores):.4f}")
 
 A CNN's local receptive field means each feature captures only a small spatial patch. Gaze fixations are globally distributed — a pedestrian may look at a distant building, a near road sign, then back to the building. ViT's **self-attention mechanism** captures these cross-region dependencies by computing attention weights between all pairs of patch tokens:
 
-$$\text{Attention}(Q, K, V) = \text{softmax}\left(\frac{QK^\T}{\sqrt{d_k}}\right)V$$
+$$\text{Attention}(Q, K, V) = \text{softmax}\left(\frac{QK^T}{\sqrt{d_k}}\right)V$$
 
 This global receptive field better mirrors the spatial structure of fixation patterns than local convolutions.
 
@@ -294,10 +296,10 @@ Predicted heatmap: [B, 1, 224, 224]
 | Loss | MSE between predicted and averaged ground-truth heatmap |
 | Optimizer | Adam, lr=0.001 |
 | Batch size | 4 |
-| Epochs | 20 |
-| Status | Architecture implemented; training not completed (N=65 insufficient for generalisation) |
+| Epochs | 20 (planned) |
+| Status | **Architecture designed; training not completed** |
 
-**Note on training feasibility:** With 13 unique SVIs and N=5 participants, the available training set (13 images → 13 averaged heatmaps) is far too small to train a ViT decoder from scratch. A meaningful evaluation would require ~500–1000 SVI–heatmap pairs. The architecture is documented here as a research trajectory for follow-up work.
+**Note on training feasibility:** With 13 unique SVIs and N=5 participants, the available training set (13 images → 13 averaged heatmaps) is far too small to train a ViT decoder meaningfully. A valid evaluation would require ~500–1000 SVI–heatmap pairs. The architecture is documented here as a research trajectory for follow-up work. The hypothesis — that environmental visual structure predicts attention distribution — remains to be validated empirically.
 
 ---
 
@@ -317,28 +319,32 @@ Experiment       Extraction          Similarity           Classification     Pre
 
 ### Stage 1 — Eye-Tracking Experiment
 
-Recruited 5 participants; calibrated GazeRecorder per-session (9-point). Participants viewed SVIs full-screen (1920×1080 display; GazeRecorder captures at 800×600). Each SVI was displayed for an unconstrained duration; participants indicated their path decision (L/S/R) verbally. Sessions were recorded via screen capture + audio.
+Recruited 5 participants; calibrated GazeRecorder per-session (9-point). Participants viewed SVIs full-screen; GazeRecorder captures gaze at 800×600 resolution. Each SVI was displayed for an unconstrained duration; participants indicated their path decision (L/S/R) verbally. Sessions were recorded via screen capture + audio.
 
 Post-session processing:
 - GazeRecorder exports one heatmap PNG per (participant, SVI)
 - Audio transcribed via browser speech-to-text API; manually reviewed for accuracy
-- Labels assigned from transcript; reasoning strings extracted verbatim
+- Labels assigned from transcript; reasoning strings extracted and normalised (lowercased, punctuation removed)
 
 ### Stage 2 — Feature Extraction
 
 ```bash
-# Visual embeddings from heatmaps
-python extract_visual_attention.py \
-    --heatmap_dir data/heatmaps \
-    --output outputs/visual_embeddings.npy
+# Visual embeddings — heatmap PNG → HSV → CLIP ViT-B/32 → 512-d vector
+python image_text_feature_analysis.py \
+    --original_dir data/svi \
+    --heatmap_dir  data/heatmaps \
+    --output       outputs/visual_embeddings.npy
 
-# Text embeddings from verbal descriptions
+# Text embeddings — verbal description → CLIP text encoder → 512-d vector
 python text_feature_extraction.py \
     --transcript_dir data/transcripts \
-    --output outputs/text_embeddings.npy
+    --output         outputs/text_embeddings.npy
+
+# Note: extract_visual_attention.py is a separate visualisation utility
+# (HSV contour overlay on original SVI) and is not part of the embedding pipeline.
 ```
 
-Both scripts use the same frozen CLIP ViT-B/32 model instance. Embeddings are L2-normalised before saving (unit vectors; cosine similarity reduces to dot product).
+Both feature extraction scripts use the same frozen CLIP ViT-B/32 model instance. Embeddings are L2-normalised before saving.
 
 ### Stage 3 — Cosine Similarity Analysis
 
@@ -355,7 +361,7 @@ Outputs per-pair similarity scores and breakdowns by:
 - Path decision class (L / S / R)
 - SVI index (scene-level variation)
 
-### Stage 4 — Path Decision Classification (My Core Contribution)
+### Stage 4 — Path Decision Classification
 
 ```bash
 python train_path_choice_model_en.py \
@@ -376,7 +382,7 @@ python heatmap_predictor.py \
     --output     outputs/predicted_heatmaps/
 ```
 
-**Status:** Architecture trains without error; MSE does not converge meaningfully with N=13 training images. Listed here for reproducibility of the architecture; a larger SVI–heatmap dataset is required for valid evaluation.
+**Status:** Architecture designed and implemented. Training was not completed within the project scope due to insufficient data (N=13 training images). Listed here for reproducibility of the architecture design; a larger SVI–heatmap dataset is required for valid evaluation.
 
 ---
 
@@ -391,6 +397,8 @@ python heatmap_predictor.py \
 | Mean cosine similarity (gaze ↔ language) | **~0.25** | ~0.00 (random vectors) |
 | Cosine range across 13 SVIs | 0.22–0.27 | — |
 
+> **Note on CV accuracy:** The reported 86.96% was obtained with SMOTE applied before the CV split (see implementation note in [Path Decision Classification](#path-decision-classification)). This figure is likely a mild overestimate of true out-of-sample performance due to potential data leakage. The test set accuracy (80%) is the more conservative and reliable estimate.
+
 ### Attention Element Breakdown
 
 | Road Type | Rank 1 Fixation Target | Rank 2 |
@@ -404,12 +412,12 @@ Buildings act as implicit navigation anchors on main roads — not formal wayfin
 
 A mean cosine of ~0.25 (range 0.22–0.27) across all 65 pairs indicates:
 
-- **Non-zero alignment:** What participants look at and what they say share semantic content in CLIP's embedding space — ruling out the null hypothesis of no relationship
+- **Non-zero alignment:** What participants look at and what they say share semantic content in CLIP's embedding space — the result is above the random baseline of ~0
 - **Substantial gap from perfect alignment (1.0):** Verbal reasoning incorporates factors inaccessible to the eye-tracking heatmap: spatial memory, prior knowledge of the city, sequential context from earlier frames, and inferred structure beyond the immediate visual field
 
-This gap directly motivates the PhD research question: do LLM-based agents, which reason explicitly through language, show tighter alignment between their "attended" visual regions and their stated navigation reasoning?
+This gap directly motivates the PhD research question: do LLM-based agents, which reason explicitly through language, show tighter alignment between their attended visual regions and their stated navigation reasoning?
 
-### Emergent Findings
+### Summary of Findings
 
 | Finding | Implication |
 |:---|:---|
@@ -417,6 +425,7 @@ This gap directly motivates the PhD research question: do LLM-based agents, whic
 | Buildings dominate fixation on main roads | Implicit landmark hierarchy — buildings over formal signage |
 | Context shift to roads on community roads | Attention strategy adapts to environmental affordances |
 | Cosine ~0.25 (positive but weak) | Verbal reasoning draws on non-visual cognitive factors |
+| ViT heatmap prediction (proposed) | Hypothesis: environmental visual structure predicts attention distribution — pending validation |
 
 ---
 
@@ -441,16 +450,18 @@ This gap directly motivates the PhD research question: do LLM-based agents, whic
 │   ├── similarity_scores.csv             # participant_id, svi_id, cosine_sim
 │   ├── model.pkl                         # trained Random Forest
 │   ├── classification_report.txt
-│   └── predicted_heatmaps/              # Stage 5 output (WIP)
+│   └── predicted_heatmaps/               # Stage 5 output (architecture WIP)
 │
-├── extract_visual_attention.py           # Stage 2a: heatmap PNG → HSV → CLIP embedding
-├── image_text_feature_analysis.py        # Stage 2a (alt): original SVI → CLIP image embedding
-├── highlight_visual_differences.py       # Visualisation: original SVI vs heatmap overlay
+├── image_text_feature_analysis.py        # Stage 2a: heatmap PNG → HSV → CLIP embedding
 ├── text_feature_extraction.py            # Stage 2b: verbal description → CLIP text embedding
 ├── feature_similarity_analysis.py        # Stage 3: pairwise cosine similarity
 ├── train_path_choice_model_en.py         # Stage 4: SMOTE + Random Forest classifier
 ├── visualize_similarity.py               # Plots: similarity distribution, per-SVI breakdown
-├── heatmap_predictor.py                  # Stage 5 (WIP): ViT heatmap prediction
+├── heatmap_predictor.py                  # Stage 5 (WIP): ViT heatmap prediction architecture
+│
+├── extract_visual_attention.py           # Visualisation utility only: HSV colour segmentation
+│                                         # → contour overlay on original SVI (not in pipeline)
+├── highlight_visual_differences.py       # Visualisation utility: original SVI vs heatmap overlay
 │
 ├── requirements.txt
 └── README.md
@@ -469,7 +480,6 @@ torchvision == 0.16.0
 ftfy == 6.1.1
 regex == 2023.10.3
 tqdm == 4.66.1
-# CLIP has no PyPI release — install from source (see below)
 scikit-learn == 1.3.2
 imbalanced-learn == 0.11.0
 opencv-python == 4.8.1.78
@@ -506,8 +516,14 @@ python -c "import clip; m, _ = clip.load('ViT-B/32'); print('CLIP OK —', sum(p
 
 ```bash
 # Stage 2 — extract embeddings
-python extract_visual_attention.py --heatmap_dir data/heatmaps --output outputs/visual_embeddings.npy
-python text_feature_extraction.py  --transcript_dir data/transcripts --output outputs/text_embeddings.npy
+python image_text_feature_analysis.py \
+    --original_dir data/svi \
+    --heatmap_dir  data/heatmaps \
+    --output       outputs/visual_embeddings.npy
+
+python text_feature_extraction.py \
+    --transcript_dir data/transcripts \
+    --output         outputs/text_embeddings.npy
 
 # Stage 3 — alignment analysis
 python feature_similarity_analysis.py \
@@ -524,21 +540,23 @@ python train_path_choice_model_en.py \
     --output  outputs/
 
 # Visualise
-python visualize_similarity.py --scores outputs/similarity_scores.csv --labels data/labels.csv
+python visualize_similarity.py \
+    --scores outputs/similarity_scores.csv \
+    --labels data/labels.csv
 ```
 
 ---
 
 ## Known Limitations
 
-| Limitation | Technical detail | Impact |
+| Limitation | Technical Detail | Impact |
 |:---|:---|:---|
 | N=5 participants | All students, aged 22–23, single demographic | Results cannot generalise; fixation patterns likely biased toward architecture-trained visual attention |
 | GazeRecorder accuracy | Webcam-based, no hardware calibration, 800×600 cap | Heatmap boundary noise propagates into CLIP embeddings; fixation centroids may be offset by 1–3° visual angle |
+| SMOTE applied before CV split | k_neighbors=4; synthetic samples derived from full dataset before fold splitting | CV accuracy (86.96%) is a mild overestimate; test set accuracy (80%) is the more reliable figure |
 | Simple feature concatenation | Equal weighting; no learnable fusion | Relative contribution of gaze vs language signal is uncontrolled; a gating mechanism would require ≥500 samples |
 | Static SVIs | No temporal sequence, no depth cues, no peripheral vision | Real navigation is sequential and embodied; static frames capture a single viewpoint moment |
-| SMOTE on N=65 | 3-NN interpolation; minimal diversity gain | Synthetic samples lie on straight lines between real samples; risk of in-distribution clustering |
-| ViT heatmap predictor | N=13 training images | MSE does not converge; architecture is a research design, not a trained model |
+| ViT heatmap predictor | Architecture designed; N=13 training images insufficient for convergence | Model not trained; hypothesis pending empirical validation |
 
 ---
 
@@ -547,9 +565,13 @@ python visualize_similarity.py --scores outputs/similarity_scores.csv --labels d
 1. Radford, A. et al. "Learning Transferable Visual Models From Natural Language Supervision." *ICML 2021*. [arXiv:2103.00020](https://arxiv.org/abs/2103.00020)
 2. Dosovitskiy, A. et al. "An Image is Worth 16×16 Words: Transformers for Image Recognition at Scale." *ICLR 2021*. [arXiv:2010.11929](https://arxiv.org/abs/2010.11929)
 3. Chawla, N.V. et al. "SMOTE: Synthetic Minority Over-sampling Technique." *JAIR 16*, 2002.
-4. Passini, R. "Wayfinding: Backbone of Graphic Support Systems." in *Visual Information For Everyday Use*, Taylor & Francis, 1998.
+4. Manley, E. and Cheng, T. "Exploring the role of spatial cognition in predicting urban traffic flow through agent-based modelling." *Transportation Research Part A* 116, 2018.
 5. Zomer, L.B. et al. "Determinants of urban wayfinding styles." *Travel Behaviour and Society* 17, 2019.
-6. Chen, X. et al. "Evaluating pedestrian wayfinding behaviour in day and night environments." *IEEE Access* 11, 2023.
+6. Passini, R. "Wayfinding: Backbone of Graphic Support Systems." in *Visual Information For Everyday Use*, Taylor & Francis, 1998.
+7. Chen, X. et al. "Evaluating pedestrian wayfinding behaviour in day and night environments." *IEEE Access* 11, 2023.
+8. Emo, B., Thrash, T., Schinazi, V. and Hölscher, C. "Wayfinding in unfamiliar environments: Report of a real-world study using eye tracking." 2016.
+9. Iftikhar, H., Shah, P. and Luximon, Y. "Human wayfinding behaviour and metrics in complex environments: A systematic literature review." *Architectural Science Review*, 2020.
+10. Wu, J. et al. "Cognitive characteristics in wayfinding tasks in commercial and residential districts during daytime and nighttime." *Advanced Engineering Informatics* 59, 2024.
 
 ---
 
