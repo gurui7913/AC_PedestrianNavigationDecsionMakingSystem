@@ -4,8 +4,7 @@
 > UCL Bartlett School of Architecture · Architectural Computation – Digital Studio 1: Simulated Realities  
 > Team: **Rui Gu** (Lead), Hexin Han, Cem Bektas · December 2024
 
-> **My contribution:** Research design · Eye-tracking experiment coordination · CLIP pipeline · Cosine similarity analysis · Random Forest classifier · ViT heatmap predictor (architecture design)
-
+> **My contribution:** Project Lead · Research design · Eye-tracking experiment coordination · CLIP pipeline
 ---
 
 ## Table of Contents
